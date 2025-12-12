@@ -1,0 +1,149 @@
+    /**
+     * @license
+     * Copyright 2024 Google LLC
+     * This script is the backend for a Student Attendance System.
+     */
+    
+    // --- CONFIGURATION ---
+    const SPREADSHEET_ID = '1bTzYVCNLxgrHSde3bsNvzaW5vw_crkMKqwFha3AtJRE'; 
+    const STUDENT_SHEET_NAME = 'Students';
+    const ATTENDANCE_SHEET_NAME = 'Attendance';
+    
+    const STUDENT_HEADERS = ['StudentID', 'Name', 'Class', 'ImageDataBase64'];
+    const ATTENDANCE_HEADERS = ['StudentID', 'Name', 'Class', 'Timestamp', 'Location', 'Status'];
+    
+    // --- GLOBAL VARIABLES ---
+    let spreadsheet, studentSheet, attendanceSheet;
+    
+    function doPost(e) {
+      try {
+        initializeApp();
+        const payload = JSON.parse(e.postData.contents);
+        const { action, data } = payload;
+    
+        switch (action) {
+          case 'getStudents': return handleGetStudents();
+          case 'addStudent': return handleAddStudent(data);
+          case 'updateStudent': return handleUpdateStudent(data);
+          case 'deleteStudent': return handleDeleteStudent(data);
+          case 'recordAttendance': return handleRecordAttendance(data);
+          case 'recordAttendanceBulk': return handleRecordAttendanceBulk(data);
+          case 'getAttendance': return handleGetAttendance();
+          default:
+            return createJsonResponse({ success: false, error: `Unknown action: ${action}` });
+        }
+      } catch (error) {
+        Logger.log(`CRITICAL ERROR in doPost: ${error.stack}`);
+        return createJsonResponse({ success: false, error: `Server error: ${error.message}` });
+      }
+    }
+    
+    // --- ACTION HANDLERS ---
+    function handleGetStudents() {
+      const data = studentSheet.getDataRange().getValues();
+      if (data.length <= 1) return createJsonResponse({ success: true, data: [] });
+      const headers = data.shift();
+      const students = data.map((row, index) => {
+        let studentObj = {};
+        headers.forEach((header, i) => {
+            studentObj[header.toLowerCase()] = row[i];
+        });
+        studentObj.id = row[0];
+        studentObj.rowIndex = index + 2;
+        return studentObj;
+      });
+      return createJsonResponse({ success: true, data: students });
+    }
+    
+    function handleAddStudent(data) {
+      const { id, name, 'class': studentClass, imageData } = data;
+      const newRow = [id, name, studentClass, imageData || ''];
+      studentSheet.appendRow(newRow);
+      return createJsonResponse({ success: true, message: 'Student added successfully' });
+    }
+    
+    function handleUpdateStudent(data) {
+      const { rowIndex, id, name, 'class': studentClass, imageData } = data;
+      if (imageData && imageData.startsWith('data:image')) {
+        studentSheet.getRange(rowIndex, 1, 1, STUDENT_HEADERS.length).setValues([[id, name, studentClass, imageData]]);
+      } else {
+        studentSheet.getRange(rowIndex, 1, 1, 3).setValues([[id, name, studentClass]]);
+      }
+      return createJsonResponse({ success: true, message: 'Student updated successfully' });
+    }
+    
+    function handleDeleteStudent(data) {
+      const { rowIndex } = data;
+      studentSheet.deleteRow(parseInt(rowIndex));
+      return createJsonResponse({ success: true, message: 'Student deleted successfully.' });
+    }
+    
+    function handleRecordAttendance(data) {
+      try {
+        Logger.log('Received data for single record: ' + JSON.stringify(data));
+        const { id, name, 'class': studentClass, timestamp, location, status } = data;
+        const newRow = [id, name, studentClass, timestamp, location, status || 'มาเรียน'];
+        attendanceSheet.appendRow(newRow);
+        return createJsonResponse({ success: true, message: 'Attendance recorded' });
+      } catch(e) {
+        Logger.log(`ERROR in handleRecordAttendance: ${e.stack}`);
+        return createJsonResponse({ success: false, error: `Server error during single record: ${e.message}` });
+      }
+    }
+    
+    function handleRecordAttendanceBulk(records) {
+      try {
+        Logger.log('Received data for bulk record: ' + JSON.stringify(records));
+        if (!records || !Array.isArray(records) || records.length === 0) {
+          return createJsonResponse({ success: true, message: 'No records to save.' });
+        }
+        records.forEach(rec => {
+          const newRow = [rec.id, rec.name, rec.class, rec.timestamp, rec.location, rec.status];
+          attendanceSheet.appendRow(newRow);
+        });
+        return createJsonResponse({ success: true, message: 'Bulk attendance recorded successfully.' });
+      } catch (error) {
+        Logger.log(`ERROR in handleRecordAttendanceBulk: ${error.stack}`);
+        return createJsonResponse({ success: false, error: `Server error during bulk record: ${error.message}` });
+      }
+    }
+    
+    function handleGetAttendance() {
+      const data = attendanceSheet.getDataRange().getValues();
+      if (data.length <= 1) return createJsonResponse({ success: true, data: [] });
+      const headers = data.shift();
+      const records = data.map(row => ({
+        id: row[0], name: row[1], class: row[2],
+        timestamp: row[3], location: row[4], status: row[5] || 'N/A'
+      }));
+      return createJsonResponse({ success: true, data: records });
+    }
+    
+    // --- HELPER FUNCTIONS ---
+    function initializeApp() {
+      try {
+        spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+      } catch (e) {
+        Logger.log(`Could not open spreadsheet with ID: ${SPREADSHEET_ID}.`);
+        throw new Error("Failed to open the configured spreadsheet. Please check SPREADSHEET_ID.");
+      }
+      studentSheet = setupSheet(STUDENT_SHEET_NAME, STUDENT_HEADERS);
+      attendanceSheet = setupSheet(ATTENDANCE_SHEET_NAME, ATTENDANCE_HEADERS);
+    }
+    
+    function setupSheet(sheetName, headers) {
+      let sheet = spreadsheet.getSheetByName(sheetName);
+      if (!sheet) {
+        sheet = spreadsheet.insertSheet(sheetName);
+        sheet.appendRow(headers);
+      } else if (sheet.getLastRow() === 0) {
+        sheet.appendRow(headers);
+      }
+      return sheet;
+    }
+    
+    function createJsonResponse(responseObject) {
+      return ContentService.createTextOutput(JSON.stringify(responseObject))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
